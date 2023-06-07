@@ -1,0 +1,92 @@
+[tool.poetry]
+authors = ["Andrei.Aksionov"]
+description = "eXplainable AI for Vision Transformers"
+license = "MIT"
+name = "xai-vit"
+packages = [{include = "src"}]
+readme = "README.md"
+version = "0.1.0"
+
+[tool.poetry.dependencies]
+ipykernel = "~6.23.1"
+loguru = "~0.7.0"
+matplotlib = "~3.7.1"
+numpy = "~1.24.3"
+omegaconf = "~2.3.0"
+pandas = "~2.0.2"
+python = "~3.10.11"
+torch = "~2.0.1"
+tqdm = "~4.65.0"
+transformers = "~4.29.2"
+
+[tool.poetry.group.dev.dependencies]
+black = {version = "~23.3.0", extras = ["jupyter"]}
+pre-commit = "~3.3.2"
+ruff = "0.0.271"
+
+# ---------------------------------------------- Tests -----------------------------------------------
+[tool.poetry.group.test.dependencies]
+pytest = "~7.3.1"
+pytest-order = "~1.1.0"
+
+[tool.pytest.ini_options]
+log_cli = true
+markers = [
+  "smoke: mark for short tests (deselect with '-m \"not smoke\"')",
+  "slow: mark for long running and memory consuming tests",
+]
+python_files = "*_test.py"
+testpaths = ["tests"]
+
+# -------------------------------------- Linting and Formatting --------------------------------------
+[tool.ruff]
+ignore = [
+  "ANN002", # Missing type annotation for *_
+  "ANN003", # Missing type annotation for **kwargs
+  "ANN101", # Missing type annotation for self in method
+  "B905", # zip() without an explicit strict= parameter
+  "D100", # Missing docstring in public module
+  "D101", # Missing docstring in public class
+  "D105", # Missing docstring in magic method
+  "EM", # flake8-errmsg
+  "FBT", # flake8-boolean-trap
+  "G", # flake8-logging-format
+  "INP001", # File {filename} is part of an implicit namespace package. Add an __init__.py
+  "N812", # Lowercase {name} imported as non-lowercase {asname}
+  "PLR0913", # Too many arguments to function call
+  "PLR2004", # Magic value used in comparison, consider replacing {value} with a constant variable
+  "PT023", # use @pytest.mark.asyncio() over @pytest.mark.asyncio
+  "TCH", # flake8-type-checking
+  "TRY003", # Avoid specifying long messages outside the exception class
+  "UP032", # Use f-string instead of `format`
+]
+line-length = 120
+select = [
+  "ALL",
+]
+target-version = "py310"
+
+[tool.ruff.pydocstyle]
+convention = "pep257"
+
+[tool.ruff.per-file-ignores]
+# D102 - Missing docstring in public method
+# S101 - Use of `assert` detected
+"*_test.py" = ["D102", "S101"]
+# D104 - missing docstring in public method
+# F401 - imported but unused
+"__init__.py" = [
+  "F401",
+  "D104",
+]
+
+[tool.isort]
+profile = "black"
+
+[tool.black]
+line_length = 120
+target-version = ["py310"]
+
+[build-system]
+build-backend = "poetry.core.masonry.api"
+requires = ["poetry-core"]
