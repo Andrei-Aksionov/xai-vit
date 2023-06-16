@@ -1,0 +1,6 @@
+seed: 42
+
+data:
+  path:
+    raw: data/raw
+    interim: data/interim
