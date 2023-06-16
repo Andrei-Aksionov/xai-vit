@@ -1,6 +1,6 @@
 <p>
-    <h2 align="center">eXplainable AI</h2>
-    <h5 align="center">for</h5>
+    <h1 align="center">eXplainable AI</h1>
+    <h6 align="center">for</h6>
     <h3 align="center">Vision Transformers</h3>
 </p>
 

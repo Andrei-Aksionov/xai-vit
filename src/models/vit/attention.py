@@ -3,7 +3,7 @@ import math
 import torch.nn.functional as F
 from torch import Tensor, nn
 
-from src.utils import log_error
+from src.utils.error import log_error
 
 
 class SelfAttention(nn.Module):

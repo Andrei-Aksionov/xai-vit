@@ -153,5 +153,6 @@ class TransformerBlock(nn.Module):
         """
         # + sign is used for residual connection
         # helps with gradient flow and allows to build deeper neural nets
+        # TODO: in huggingface repo they use LayerScale. Do I need one?
         x = x + self.self_attention(self.layer_norm_1(x))
         return x + self.feed_forward(self.layer_norm_2(x))
