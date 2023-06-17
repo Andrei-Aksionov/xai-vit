@@ -18,7 +18,7 @@ class TestPatchEmbeddings:
             ),
         ),
     )
-    def test_return_patches(self, batch_size, channels, image_size, patch_size) -> None:
+    def test_return_patches(self, batch_size: int, channels: int, image_size: int, patch_size: int) -> None:
         # Given
         x = torch.randn((batch_size, channels, image_size, image_size))
         B, C, H, W = x.shape
