@@ -8,6 +8,7 @@ readme = "README.md"
 version = "0.1.0"
 
 [tool.poetry.dependencies]
+einops = "~0.6.1"
 ipykernel = "~6.23.1"
 loguru = "~0.7.0"
 matplotlib = "~3.7.1"
