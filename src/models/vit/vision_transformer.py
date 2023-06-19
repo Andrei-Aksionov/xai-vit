@@ -1,4 +1,5 @@
 import math
+import re
 from functools import reduce
 
 import torch
@@ -6,17 +7,18 @@ import torch.nn.functional as F
 from loguru import logger
 from torch import Tensor, nn
 
+from src.models.vit.embeddings import PatchEmbeddings, PatchEmbeddingsTimm
 from src.models.vit.transformer_block import LayerNorm, TransformerBlock
 from src.utils.error import log_error
 
 
+# TODO: rename
 class ViT(nn.Module):
     def __init__(
         self,
         # TODO: create a config class
         # vocab_size: int,
         embeddings_size: int,
-        context_size: int,
         head_size: int | None,
         num_heads: int,
         feed_forward_scaling: int,
@@ -26,6 +28,7 @@ class ViT(nn.Module):
         num_classes: int,  # TODO: docstring argument
         num_channels: int,
         patch_size: int,
+        image_size: int,
         # weight_tying: bool = True,
         # weight_decay: float | None = None,
     ) -> None:
@@ -37,9 +40,6 @@ class ViT(nn.Module):
             number of unique tokens in vocabulary
         embeddings_size : int
             size of the embeddings - the size of input of self-attention
-        context_size : int
-            the number of tokens that will be used during calculation attention map and
-            weighted averaging of value of each token
         head_size : int | None
             the size of output of self-attention
         num_heads : int
@@ -66,7 +66,6 @@ class ViT(nn.Module):
         # self.vocab_size = vocab_size
         self.embeddings_size = embeddings_size
         # TODO: context size is calculated during patch conversion
-        self.context_size = context_size
         self.head_size = head_size
         self.num_heads = num_heads
         self.feed_forward_scaling = feed_forward_scaling
@@ -79,9 +78,36 @@ class ViT(nn.Module):
         # TODO: this one needs to be calculated
         self.num_channels = num_channels
         self.patch_size = patch_size
+        self.image_size = image_size
+
+        # Create patch embeddings
+        # TODO: check should we use bias or not
+        # self.patch_embeddings = PatchEmbeddingsTimm(
+        #     patch_size=self.patch_size,
+        #     in_channels=self.num_channels,
+        #     embeddings_size=self.embeddings_size,
+        #     bias=True,
+        # )
+        # self.context_size = self.patch_embeddings.get_num_patches(self.image_size)
+        self.context_size = (image_size // patch_size) ** 2
+
+        self.embeddings = nn.ParameterDict(
+            dict(
+                cls_token=nn.Parameter(torch.zeros(1, 1, self.embeddings_size)),
+                position_embeddings=nn.Parameter(torch.randn(1, self.context_size + 1, self.embeddings_size) * 0.02),
+                patch_embeddings=PatchEmbeddingsTimm(
+                    patch_size=self.patch_size,
+                    in_channels=self.num_channels,
+                    embeddings_size=self.embeddings_size,
+                    bias=True,
+                ),
+            )
+        )
 
         # TODO: input layer that transforms input embedding size to model's embeddings size
-        self.input_layer = nn.Linear(self.num_channels * self.patch_size**2, self.embeddings_size)
+        # TODO: transform it into LazyLinear
+        # self.input_layer = nn.LazyLinear(self.embeddings_size)
+        # self.input_layer = nn.Linear(self.num_channels * self.patch_size**2, self.embeddings_size)
 
         # TODO: change it to patch embeddings
         # self.token_embedding_table = nn.Embedding(self.vocab_size, self.embeddings_size)
@@ -92,18 +118,17 @@ class ViT(nn.Module):
         # TODO: change positional embeddings
         # TODO: can we use here nn.Embeddings?
         # NOTE: self.context_size + 1 because we need account cls token
-        self.positional_embedding_table = nn.Parameter(
-            torch.randn(1, self.context_size + 1, self.embeddings_size) * 0.02,
-        )
+        # self.positional_embedding_table = nn.Parameter(
+        #     torch.randn(1, self.context_size + 1, self.embeddings_size) * 0.02,
+        # )
         # self.positional_embedding_table = nn.Embedding(self.context_size, self.embeddings_size)
         # TODO: add cls token
-        self.cls_token = nn.Parameter(torch.zeros(1, 1, self.embeddings_size))
-        self.embeddings_dropout = nn.Dropout(self.dropout)
+        # self.cls_token = nn.Parameter(torch.zeros(1, 1, self.embeddings_size))
+        self.embeddings_dropout = nn.Dropout(self.dropout) if self.dropout else nn.Identity()
         self.transformer_blocks = nn.ModuleList(
             [
                 TransformerBlock(
                     embeddings_size=self.embeddings_size,
-                    context_size=self.context_size,
                     head_size=self.head_size,
                     num_heads=self.num_heads,
                     bias=self.bias,
@@ -113,11 +138,11 @@ class ViT(nn.Module):
                 for _ in range(self.num_layers)
             ],
         )
-        self.layer_norm_final = LayerNorm(self.embeddings_size, bias=self.bias)  # final layer norm
+        self.layernorm = LayerNorm(self.embeddings_size, bias=self.bias)  # final layer norm
 
         # TODO: change it to classification head
         # self.language_model_head = nn.Linear(self.embeddings_size, self.vocab_size, bias=False)
-        self.head = nn.Linear(self.embeddings_size, self.num_classes)
+        self.classifier = nn.Linear(self.embeddings_size, self.num_classes)
 
         # TODO: is it even a thing for ViT
         # if self.weigh_tying:
@@ -149,27 +174,6 @@ class ViT(nn.Module):
             # FIXME: this doesn't work, says "Parameter has no attribute weight"
             params_count -= self.positional_embedding_table.weight.numel()
         return params_count
-
-    def __init_weights(self, module: torch.nn.modules) -> None:
-        """Initialize Embedding and Linear layers with a smaller std.
-
-        By default weights of Embedding layer are initialized from normal distribution
-        with zero mean and unit std ( N(0, 1) ).
-        Weights for linear layer are initialized from uniform distribution from
-        [-k**0.5, k**0.5], where k = 1 / in_features. Even with 128 features it will be
-        [-0.09, 0.09].
-
-        Parameters
-        ----------
-        module : torch.nn.modules
-            module of the network
-        """
-        if isinstance(module, nn.Embedding | nn.Linear):
-            # TODO: check different std init works better
-            #   0.2 / sqrt ( 2 * number of transformer blocks)
-            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
-            if hasattr(module, "bias") and module.bias is not None:
-                torch.nn.init.zeros_(module.bias)
 
     def forward(self, x: Tensor) -> Tensor:
         """Do the whole forward pass for decoder part of transformer.
@@ -225,106 +229,48 @@ class ViT(nn.Module):
         #     return self.language_model_head(x[:, -1:, :])  # (B, 1, vocab_size)
         # return self.language_model_head(x)  # (B, T, vocab_size)
 
+        print(f"0: {x.shape=}")
+        x = self.embeddings.patch_embeddings(x)
         B, T, C = x.shape
-        # B, T, C_1, C_2 = x.shape
         print(f"1: {x.shape=}")
 
         # from input channels to embeddings_size
-        x = self.input_layer(x)
-        print(f"2: {x.shape=}")
+        # x = self.input_layer(x)
+        # print(f"2: {x.shape=}")
 
         # add CLS token and positional embeddings
-        cls_token = self.cls_token.repeat(B, 1, 1)
+        cls_token = self.embeddings.cls_token.repeat(B, 1, 1)
+        # cls_token = self.embeddings.cls_token.expand(B, -1, -1)
         print(f"3: {cls_token.shape=}")
         x = torch.cat([cls_token, x], dim=1)
         print(f"4: {x.shape=}")
         # TODO: why T + 1?
-        x = x + self.positional_embedding_table[:, : T + 1]
+        # apparently it's for additional cls token
+        # TODO: do we even need indexing?
+        x = x + self.embeddings.position_embeddings[:, : T + 1]
         print(f"5: {x.shape=}")
 
         # apply transformer
         x = self.embeddings_dropout(x)
         print(f"6: {x.shape=}")
         # TODO: do we need it here?
-        x = x.transpose(0, 1)
+        # we can get rid of it
+        # x = x.transpose(0, 1)
         # TODO: change it to sequential
         for block in self.transformer_blocks:
             x = block(x)
         print(f"7: {x.shape=}")
 
         # classification step
-        cls = x[0]
+        # cls = x[0]
+        cls = x[:, 0, :]
         print(f"8: {cls.shape=}")
-        predictions = self.head(cls)
+        predictions = self.classifier(cls)
         print(f"9: {predictions.shape=}")
         return predictions
 
-    def __optimizer_parameters(self, weight_decay: float) -> tuple[dict, dict]:
-        """Configure optimizer with weight decay for nn.Linear.
-
-        Parameters
-        ----------
-        weight_decay : float
-            weight decay (L2 penalty)
-
-        Returns
-        -------
-        tuple[dict, dict]
-            list of two dictionaries, containing parameter names that will have weight decay
-            and that will not accordingly
-
-        Raises
-        ------
-        ValueError
-            if model's layer are not in (nn.Linear, nn.LayerNorm, LayerNorm, nn.Embedding)
-        """
-        # separate out all parameters to those that will and won't experience regularizing weight decay
-        decay, no_decay = set(), set()
-        expected_weight_modules = (nn.Linear, nn.LayerNorm, LayerNorm, nn.Embedding)
-        for pn, _ in self.named_parameters():
-            # get the parent module by the parameter's name
-            module = reduce(lambda module, key: getattr(module, key), pn.split(".")[:-1], self)
-            if type(module) not in expected_weight_modules:
-                log_error(f"Expected the module to be one of '{expected_weight_modules}', but got {type(module)}")
-            if isinstance(module, nn.Linear) and pn.endswith("weight"):
-                decay.add(pn)
-            else:
-                no_decay.add(pn)
-
-        # create the pytorch optimizer object
-        param_dict = dict(self.named_parameters())
-        return [
-            {"params": [param_dict[pn] for pn in sorted(decay)], "weight_decay": weight_decay},
-            {"params": [param_dict[pn] for pn in sorted(no_decay)], "weight_decay": 0.0},
-        ]
-
-    def loss(self, logits: Tensor, targets: Tensor) -> Tensor:
-        """Prepare tensors to be compatible with Pytorch's Cross-Entropy loss and applies it.
-
-        Cross-Entropy expects to have features as the second-dimension, so we first need to
-        transform logits in supported shape and in order to align targets tensor with logits tensor,
-        we need to transform targets too.
-
-        Parameters
-        ----------
-        logits : Tensor
-            tensor with model's outputs
-        targets : Tensor
-            tensor with true labels
-
-        Returns
-        -------
-        Tensor
-            tensor with loss value (of how good model's predictions are)
-        """
-        B, T, C = logits.shape  # noqa: N806
-        return F.cross_entropy(
-            logits.view(B * T, C),
-            targets.view(B * T),
-        )
-
     @classmethod
-    def from_pretrained(cls: "GPTLanguageModel", gpt2_type: str) -> "GPTLanguageModel":
+    def from_pretrained(cls: "ViT", vit_type: str) -> "ViT":
         """Create GPT2 model with weights copied from Huggingface pretrained model.
 
         Parameters
@@ -353,94 +299,100 @@ class ViT(nn.Module):
         # source* | the model from which the weight are copied (Huggingface GPT2 implementation)
 
         # huggingface transformers library is needed only in this method
-        from transformers import GPT2Config, GPT2LMHeadModel
+        from transformers import ViTConfig, ViTForImageClassification
 
         # check that the gpt2 type is supported
-        supported_types = ("gpt2", "gpt2-medium", "gpt2-large", "gpt2-xl")
-        if gpt2_type not in supported_types:
-            log_error(f"Only '{supported_types}' are supported, but '{gpt2_type}' was provided.")
+        supported_types = "google/vit-base-patch16-224"
+        if vit_type not in supported_types:
+            logger.warning(f"Only '{supported_types}' were tested, but '{vit_type}' was provide.")
 
         # prepare config that will be passed into our GPT implementation
-        source_config = GPT2Config.get_config_dict(gpt2_type)[0]
+        source_config = ViTConfig.from_pretrained(vit_type)
         # syncing argument names between our GPT implementation and from Huggingface
+        # TODO: fix ordering
         target_config = {
-            "vocab_size": source_config["vocab_size"],
-            "embeddings_size": source_config["n_embd"],
-            "context_size": source_config["n_ctx"],
-            "num_layers": source_config["n_layer"],
-            "num_heads": source_config["n_head"],
+            "embeddings_size": source_config.hidden_size,
             "head_size": None,
-            "feed_forward_scaling": 4,
-            "bias": True,
+            "num_heads": source_config.num_attention_heads,
+            "feed_forward_scaling": source_config.intermediate_size // source_config.hidden_size,
+            "num_layers": source_config.num_hidden_layers,
+            # TODO: in config it's a qkv bias
+            "bias": source_config.qkv_bias,
+            # TODO: there are at least two different dropouts
+            "dropout": source_config.hidden_dropout_prob,
+            "num_classes": 1_000,
+            "num_channels": source_config.num_channels,
+            "patch_size": source_config.patch_size,
+            "image_size": source_config.image_size,
         }
-        # Dropouts for embedding, attention, residual, and summary in Huggingface implementation have to be identical
-        dropouts = [(name, value) for name, value in source_config.items() if "dropout" in name]
-        if any(dropouts[0][1] != x[1] for x in dropouts[1:]):
-            log_error(f"All dropouts for GPT2 model should have had the same value, but in fact received '{dropouts}'")
-        target_config["dropout"] = dropouts[0][1]
 
         # Instantiate GPT model and extract params
-        logger.debug("Creating GPT model with parameters: {}".format(target_config))
-        target_model = GPTLanguageModel(**target_config)
+        logger.debug("Creating ViT model with parameters: {}".format(target_config))
+        target_model = ViT(**target_config)
         # extract gpt model parameters into a variable
         target_state_dict = target_model.state_dict()
-        # drop tril as it's a buffer (doesn't learn anything)
-        target_state_dict_keys = [k for k in target_state_dict if not k.endswith(".self_attention.tril")]
 
+        # TODO: source model should be placed before target one
         # create Huggingface pretrained GPT2 model
-        logger.debug("Loading pretrained Huggingface model of size '{}' ...".format(gpt2_type))
-        source_model = GPT2LMHeadModel.from_pretrained(gpt2_type)
+        logger.debug("Loading pretrained Huggingface model of size '{}' ...".format(vit_type))
+        source_model = ViTForImageClassification.from_pretrained(vit_type)
         logger.debug("Huggingface model is loaded.")
         source_state_dict = source_model.state_dict()
-        # skip bias as it's not a parameter
-        source_state_dict_keys = [
-            key for key in source_state_dict if not key.endswith((".attn.bias", ".attn.masked_bias"))
-        ]
-
-        if len(target_state_dict_keys) != len(source_state_dict_keys):
-            log_error(f"Mismatch number of keys: {len(target_state_dict_keys)} != {len(source_state_dict_keys)}")
 
         # since names of layers are different for our implementation and the one from Huggingface,
         # we need to map them properly
-        param_mapping = {
-            "transformer": "",
-            "wte": "token_embedding_table",
-            "wpe": "positional_embedding_table",
-            "h": "transformer_blocks",
-            "attn": "self_attention",
-            "c_attn": "causal_self_attention",
-            "ln_1": "layer_norm_1",
-            "ln_2": "layer_norm_2",
-            "c_proj": "projection",
-            "mlp": "feed_forward",
-            "ln_f": "layer_norm_final",
-            "lm_head": "language_model_head",
-        }
+        param_mapping = (
+            (r"vit\.", ""),
+            (r"encoder\.layer", "transformer_blocks"),
+            (r"attention\.attention", "attention"),
+            (r"attention\.output\.dense", "attention.output"),
+            (r"intermediate\.dense", "feed_forward.intermediate"),
+            (r"(\d)(\.output\.dense)", "\g<1>.feed_forward.output"),
+        )
 
         def sync_name(name: str) -> str:
-            names_renamed = [param_mapping.get(n, n) for n in name.split(".")]
-            return ".".join(filter(None, names_renamed))
+            for pattern, replacement in param_mapping:
+                name = re.sub(pattern, replacement, name)
+            return name
 
-        # in Huggingface implementation attention and feed forward use 'Conv1D',
-        # while in this implementation - LinearLayer
-        # that means that we can use weights for those layers, only we need to transpose them before copying
-        to_transposed = ("attn.c_attn.weight", "attn.c_proj.weight", "mlp.c_fc.weight", "mlp.c_proj.weight")
-
-        # loading weights
-        logger.debug("Starting copying weights from pretrained Huggingface model into our implementation ...")
-        for source_key in source_state_dict_keys:
+        # loading weights: step 1 of 2
+        for source_key in source_state_dict.keys():
+            # in Huggingface implementation query, key and value matrices are
+            # stored separately, while in this implementation - in a combined qkv matrix.
+            # So for now skip corresponding weights - it will be done later
+            if any(key in source_key for key in ("query", "key", "value")):
+                continue
             # map param name from Hugginface notation to this implementation's notation
             target_key = sync_name(source_key)
             source_weights = source_state_dict[source_key]
-            if source_key.endswith(to_transposed):
-                source_weights = source_weights.t()
             if source_weights.shape != target_state_dict[target_key].shape:
                 log_error(
-                    f"Shape mismatch: shape of source '{source_weights.shape}' and destination - "
+                    f"Shape mismatch: for '{target_key}' shape of source '{source_weights.shape}' and destination - "
                     f"'{target_state_dict[target_key].shape}'",
                 )
             with torch.no_grad():
                 target_state_dict[target_key].copy_(source_weights)
+
+        # loading weights: step 2 of 2
+        # combine weights for query, key and value along embeddings dimension and copy
+        # into ours qkv matrix
+        for idx in range(target_model.num_layers):
+            source_key_template = f"vit.encoder.layer.{idx}.attention.attention.{{matrix}}.{{weight}}"
+            target_key_template = f"transformer_blocks.{idx}.attention.qkv.{{weight}}"
+
+            for weight_type in ("weight", "bias"):
+                source_weights = torch.concat(
+                    [
+                        source_state_dict[source_key_template.format(matrix=m, weight=weight_type)]
+                        for m in ("query", "key", "value")
+                    ],
+                    dim=0,
+                )
+                target_key = target_key_template.format(weight=weight_type)
+
+                with torch.no_grad():
+                    target_state_dict[target_key].copy_(source_weights)
+
         logger.debug("Weights are copied.")
 
         return target_model

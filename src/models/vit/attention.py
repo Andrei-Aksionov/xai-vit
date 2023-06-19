@@ -1,5 +1,6 @@
 import math
 
+import einops
 import torch.nn.functional as F
 from torch import Tensor, nn
 
@@ -10,7 +11,6 @@ class SelfAttention(nn.Module):
     def __init__(
         self,
         embeddings_size: int,
-        context_size: int,
         head_size: int | None,
         num_heads: int,
         bias: bool,
@@ -25,9 +25,6 @@ class SelfAttention(nn.Module):
         ----------
         embeddings_size : int
             size of the embeddings - the size of input of self-attention
-        context_size : int
-            the number of tokens that will be used during calculation attention map and
-            weighted averaging of value of each token
         head_size : int | None
             the size of output of self-attention;
             if not provided `head_size` will be equal to `embeddings_size` // `num_heads`, so it should be divisible
@@ -55,7 +52,6 @@ class SelfAttention(nn.Module):
             head_size = embeddings_size // num_heads
 
         self.embeddings_size = embeddings_size
-        self.context_size = context_size
         self.head_size = head_size
         self.num_heads = num_heads
         self.bias = bias
@@ -63,11 +59,14 @@ class SelfAttention(nn.Module):
 
         # key, query and value projections (hence `3 * ...`) for all heads in a single batch
         self.qkv = nn.Linear(embeddings_size, 3 * self.head_size * self.num_heads, bias=self.bias)
+        # self.query = nn.Linear(embeddings_size, embeddings_size, bias=self.bias)
+        # self.key = nn.Linear(embeddings_size, embeddings_size, bias=self.bias)
+        # self.value = nn.Linear(embeddings_size, embeddings_size, bias=self.bias)
         # output projection
-        self.projection = nn.Linear(self.head_size * self.num_heads, embeddings_size, bias=self.bias)
+        self.output = nn.Linear(self.head_size * self.num_heads, embeddings_size, bias=self.bias)
         # regularization
-        self.attention_dropout = nn.Dropout(self.dropout)
-        self.projection_dropout = nn.Dropout(self.dropout)
+        self.attention_dropout = nn.Dropout(self.dropout) if self.dropout else nn.Identity()
+        self.projection_dropout = nn.Dropout(self.dropout) if self.dropout else nn.Identity()
 
     def forward(self, x: Tensor) -> Tensor:
         """Do multi-head attention in a single pass.
@@ -97,15 +96,26 @@ class SelfAttention(nn.Module):
 
         # TODO: apply einops
         # single pass for query, key and value; that's why we need to split into 3 parts
-        query, key, value = self.qkv(x).split(
-            self.head_size * self.num_heads,
-            dim=-1,
-        )  # (B, T, C) -> (B, T, 3 * hs * nh) -> (B, T, hs * nh)
+        # query, key, value = self.qkv(x).split(
+        #     self.head_size * self.num_heads,
+        #     dim=-1,
+        # )  # (B, T, C) -> (B, T, 3 * hs * nh) -> (B, T, hs * nh)
+
+        qkv = self.qkv(x).chunk(3, dim=-1)
 
         # transform (B, T, nh * hs) -> (B, nh, T, hs) so it's similar to multi-head attention
-        key = key.view(B, T, self.num_heads, self.head_size).transpose(1, 2)  # (B, nh, T, hs)
-        query = query.view(B, T, self.num_heads, self.head_size).transpose(1, 2)  # (B, nh, T, hs)
-        value = value.view(B, T, self.num_heads, self.head_size).transpose(1, 2)  # (B, nh, T, hs)
+        # key = key.view(B, T, self.num_heads, self.head_size).transpose(1, 2)  # (B, nh, T, hs)
+        # query = query.view(B, T, self.num_heads, self.head_size).transpose(1, 2)  # (B, nh, T, hs)
+        # value = value.view(B, T, self.num_heads, self.head_size).transpose(1, 2)  # (B, nh, T, hs)
+
+        # query = einops.rearrange(query, "B T (nh hs) -> B nh T hs", nh=self.num_heads)
+        # key = einops.rearrange(key, "B T (nh hs) -> B nh T hs", nh=self.num_heads)
+        # value = einops.rearrange(value, "B T (nh hs) -> B nh T hs", nh=self.num_heads)
+        query, key, value = map(lambda t: einops.rearrange(t, "B T (nh hs) -> B nh T hs", nh=self.num_heads), qkv)
+
+        # query = self.query(x).view(B, T, self.num_heads, self.head_size).transpose(1, 2)
+        # key = self.key(x).view(B, T, self.num_heads, self.head_size).transpose(1, 2)
+        # value = self.value(x).view(B, T, self.num_heads, self.head_size).transpose(1, 2)
 
         # to obtain attention scores first do dot product of query and key
         attention_scores = query @ key.mT  # (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
@@ -130,8 +140,9 @@ class SelfAttention(nn.Module):
         # perform the weighted aggregation of the values
         output = attention_scores @ value  # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
         # re-assemble all head outputs side by side
-        output = output.transpose(1, 2).reshape(B, T, self.head_size * self.num_heads)  # (B, T, hs * nh)
+        output = einops.rearrange(output, "B nh T hs -> B T (nh hs)")
+        # output = output.transpose(1, 2).reshape(B, T, self.head_size * self.num_heads)  # (B, T, hs * nh)
         # output projection
-        output = self.projection(output)  # (B, T, C)
+        output = self.output(output)  # (B, T, C)
 
         return self.projection_dropout(output)  # (B, T, C)

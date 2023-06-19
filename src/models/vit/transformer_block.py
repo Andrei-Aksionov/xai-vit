@@ -34,17 +34,17 @@ class FeedForward(nn.Module):
         self.scaling = scaling
         self.dropout = dropout
 
-        self.c_fc = nn.Linear(self.embeddings_size, self.scaling * self.embeddings_size, bias=self.bias)
+        self.intermediate = nn.Linear(self.embeddings_size, self.scaling * self.embeddings_size, bias=self.bias)
         self.gelu = nn.GELU(approximate="tanh")
-        self.projection = nn.Linear(self.scaling * self.embeddings_size, self.embeddings_size, bias=self.bias)
-        self.dropout = nn.Dropout(self.dropout)
+        self.output = nn.Linear(self.scaling * self.embeddings_size, self.embeddings_size, bias=self.bias)
+        self.dropout = nn.Dropout(self.dropout) if self.dropout else nn.Identity()
 
     def forward(self, x: Tensor) -> Tensor:  # noqa: D102
         # TODO: redo it as a nn.Sequential
-        x = self.c_fc(x)
+        x = self.intermediate(x)
         x = self.gelu(x)
         x = self.dropout(x)
-        x = self.projection(x)
+        x = self.output(x)
         # TODO: check that we need that last dropout
         return self.dropout(x)
 
@@ -71,7 +71,6 @@ class TransformerBlock(nn.Module):
     def __init__(
         self,
         embeddings_size: int,
-        context_size: int,
         head_size: int | None,
         num_heads: int,
         bias: bool,
@@ -88,9 +87,6 @@ class TransformerBlock(nn.Module):
         ----------
         embeddings_size : int
             size of the embeddings - the size of input of self-attention
-        context_size : int
-            the number of tokens that will be used during calculation attention map and
-            weighted averaging of value of each token
         head_size : int | None
             the size of output of self-attention;
             if not provided `head_size` will be equal to `embeddings_size` // `num_heads`, so it should be divisible
@@ -108,7 +104,6 @@ class TransformerBlock(nn.Module):
         super().__init__()
 
         self.embeddings_size = embeddings_size
-        self.context_size = context_size
         self.head_size = head_size
         self.num_heads = num_heads
         self.bias = bias
@@ -117,14 +112,13 @@ class TransformerBlock(nn.Module):
 
         attention_kwargs = {
             "embeddings_size": self.embeddings_size,
-            "context_size": self.context_size,
             "head_size": self.head_size,
             "num_heads": self.num_heads,
             "bias": self.bias,
             "dropout": self.dropout,
         }
 
-        self.self_attention = SelfAttention(**attention_kwargs)
+        self.attention = SelfAttention(**attention_kwargs)
 
         self.feed_forward = FeedForward(
             embeddings_size=self.embeddings_size,
@@ -132,8 +126,8 @@ class TransformerBlock(nn.Module):
             scaling=self.feed_forward_scaling,
             dropout=self.dropout,
         )
-        self.layer_norm_1 = LayerNorm(normalized_shape=self.embeddings_size, bias=self.bias)
-        self.layer_norm_2 = LayerNorm(normalized_shape=self.embeddings_size, bias=self.bias)
+        self.layernorm_before = LayerNorm(normalized_shape=self.embeddings_size, bias=self.bias)
+        self.layernorm_after = LayerNorm(normalized_shape=self.embeddings_size, bias=self.bias)
 
     def forward(self, x: Tensor) -> Tensor:
         """Apply transformer block with layer norm, self-attention and feed-forward.
@@ -154,5 +148,5 @@ class TransformerBlock(nn.Module):
         # + sign is used for residual connection
         # helps with gradient flow and allows to build deeper neural nets
         # TODO: in huggingface repo they use LayerScale. Do I need one?
-        x = x + self.self_attention(self.layer_norm_1(x))
-        return x + self.feed_forward(self.layer_norm_2(x))
+        x = x + self.attention(self.layernorm_before(x))
+        return x + self.feed_forward(self.layernorm_after(x))

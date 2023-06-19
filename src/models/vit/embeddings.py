@@ -1,5 +1,6 @@
 import einops
-from torch import Tensor
+import torch
+from torch import Tensor, nn
 
 
 class PatchEmbeddings:
@@ -52,3 +53,34 @@ class PatchEmbeddings:
         x = x.flatten(1, 2)  # (B, Ht*Wt, C, P, P)
         x = x.flatten(2, 4)  # (B, Ht*Wt, C*P*P)
         return x
+
+    def get_num_patches(self, image_size: int) -> int:
+        return (image_size // self.patch_size) ** 2
+
+
+class PatchEmbeddingsTimm(nn.Module):
+    def __init__(self, patch_size, in_channels, embeddings_size, bias) -> None:
+        super().__init__()
+        self.patch_size = patch_size
+        self.in_channels = in_channels
+        self.embeddings_size = embeddings_size
+        self.bias = bias
+
+        self.projection = nn.Conv2d(in_channels, embeddings_size, kernel_size=patch_size, stride=patch_size)
+
+    def forward(self, x: Tensor) -> Tensor:
+        B, C, H, W = x.shape
+        x = self.projection(x)  # (1, 768, 14, 14)
+        # x = x.flatten(2).transpose(1, 2)  # (N, C, H, W) -> (N, L, C) (1, 196, 768)
+        x = einops.rearrange(x, "B C kh kw -> B (kh kw) C")
+        return x
+
+    def get_num_patches(self, image_size: int) -> int:
+        return (image_size // self.patch_size) ** 2
+
+
+# TODO: remove it
+if __name__ == "__main__":
+    embeddings = PatchEmbeddingsTimm(patch_size=16, in_channels=3, embeddings_size=768, bias=True)
+    x = torch.randn((1, 3, 224, 224))
+    out = embeddings(x)
