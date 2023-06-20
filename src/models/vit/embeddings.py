@@ -36,8 +36,8 @@ class ImageToPatches:
         # Ht, Wt - how many patches can be fitted into height/width dimension
         # P - patch size
 
-        B, C, H, W = x.shape  # noqa: N806
-        P = self.patch_size  # noqa: N806
+        B, C, H, W = x.shape
+        P = self.patch_size
 
         if use_einops:
             return einops.rearrange(
@@ -105,7 +105,7 @@ class PatchEmbeddings(nn.Module):
         # fmH, fmW - feature map height and width correspondingly
         # embd - embeddings size
 
-        B, C, H, W = x.shape  # noqa: N806
+        B, C, H, W = x.shape
         x = self.projection(x)  # (B, embeddings_size, fmH, fmW)
         return einops.rearrange(x, "B embd fmH fmW -> B (fmH fmW) embd")
 
