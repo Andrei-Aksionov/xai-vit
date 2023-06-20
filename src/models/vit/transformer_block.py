@@ -3,12 +3,11 @@ from torch import Tensor, nn
 from src.models.vit.attention import SelfAttention
 
 
-# TODO: perhaps rename FeedForward to MLP?
 class FeedForward(nn.Module):
     def __init__(self, embeddings_size: int, bias: bool, scaling: int, dropout: float) -> None:
         """Apply on per-token level. Each token is processed independently.
 
-        If the is no feed-forward layer, self-attention is simply a process of re-averaging of value vectors. In order
+        If there is no feed-forward layer, self-attention is simply a process of re-averaging vector's values. In order
         to add element-wise non-linearity transformation of incoming vectors we add feed-forward part.
 
         You can think about it in this way:
@@ -25,7 +24,7 @@ class FeedForward(nn.Module):
             feed-forward has two fully-connected layers; the number of neurons between them is larger
             than input and output sizes, `scaling` specifies by how much
         dropout : float
-            how many connection between tokens are dropped during each forward pass
+            how many connections between tokens are dropped during each forward pass
         """
         super().__init__()
 
@@ -35,17 +34,15 @@ class FeedForward(nn.Module):
         self.dropout = dropout
 
         self.intermediate = nn.Linear(self.embeddings_size, self.scaling * self.embeddings_size, bias=self.bias)
-        self.gelu = nn.GELU(approximate="tanh")
+        self.gelu = nn.GELU()
         self.output = nn.Linear(self.scaling * self.embeddings_size, self.embeddings_size, bias=self.bias)
         self.dropout = nn.Dropout(self.dropout) if self.dropout else nn.Identity()
 
     def forward(self, x: Tensor) -> Tensor:  # noqa: D102
-        # TODO: redo it as a nn.Sequential
         x = self.intermediate(x)
         x = self.gelu(x)
         x = self.dropout(x)
         x = self.output(x)
-        # TODO: check that we need that last dropout
         return self.dropout(x)
 
 
@@ -96,7 +93,7 @@ class TransformerBlock(nn.Module):
         bias: bool
             whether to use bias or not: without bias might be a bit better and faster (but it's not for sure)
         dropout : float
-            how many connection between tokens are dropped during each forward pass
+            how many connections between tokens are dropped during each forward pass
         feed_forward_scaling: int
             feed-forward has two fully-connected layers; the number of neurons between them is larger
             than input and output sizes, `feed_forward_scaling` specifies by how much
@@ -110,29 +107,25 @@ class TransformerBlock(nn.Module):
         self.dropout = dropout
         self.feed_forward_scaling = feed_forward_scaling
 
-        attention_kwargs = {
-            "embeddings_size": self.embeddings_size,
-            "head_size": self.head_size,
-            "num_heads": self.num_heads,
-            "bias": self.bias,
-            "dropout": self.dropout,
-        }
-
-        self.attention = SelfAttention(**attention_kwargs)
-
+        self.attention = SelfAttention(
+            embeddings_size=self.embeddings_size,
+            head_size=self.head_size,
+            num_heads=self.num_heads,
+            bias=self.bias,
+            dropout=self.dropout,
+        )
         self.feed_forward = FeedForward(
             embeddings_size=self.embeddings_size,
             bias=self.bias,
             scaling=self.feed_forward_scaling,
             dropout=self.dropout,
         )
+        # before and after self-attention step
         self.layernorm_before = LayerNorm(normalized_shape=self.embeddings_size, bias=self.bias)
         self.layernorm_after = LayerNorm(normalized_shape=self.embeddings_size, bias=self.bias)
 
     def forward(self, x: Tensor) -> Tensor:
         """Apply transformer block with layer norm, self-attention and feed-forward.
-
-        `+` sign is for residual connection (allows to build deeper neural nets)
 
         Parameters
         ----------
@@ -147,6 +140,5 @@ class TransformerBlock(nn.Module):
         """
         # + sign is used for residual connection
         # helps with gradient flow and allows to build deeper neural nets
-        # TODO: in huggingface repo they use LayerScale. Do I need one?
         x = x + self.attention(self.layernorm_before(x))
         return x + self.feed_forward(self.layernorm_after(x))

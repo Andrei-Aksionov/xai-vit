@@ -34,7 +34,7 @@ class SelfAttention(nn.Module):
         bias : bool
             whether to use bias or not: without bias might be a bit better and faster (but it's not for sure)
         dropout : float
-            how many connection between tokens are dropped during each forward pass
+            how many connections between tokens are dropped during each forward pass
 
         Raises
         ------
