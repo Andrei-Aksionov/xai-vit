@@ -59,9 +59,6 @@ class SelfAttention(nn.Module):
 
         # key, query and value projections (hence `3 * ...`) for all heads in a single batch
         self.qkv = nn.Linear(embeddings_size, 3 * self.head_size * self.num_heads, bias=self.bias)
-        # self.query = nn.Linear(embeddings_size, embeddings_size, bias=self.bias)
-        # self.key = nn.Linear(embeddings_size, embeddings_size, bias=self.bias)
-        # self.value = nn.Linear(embeddings_size, embeddings_size, bias=self.bias)
         # output projection
         self.output = nn.Linear(self.head_size * self.num_heads, embeddings_size, bias=self.bias)
         # regularization
@@ -88,34 +85,17 @@ class SelfAttention(nn.Module):
         # notation:
         # - B  | batch
         # - T  | time-step (sequence length)
-        # - C  | embeddings size
+        # - C  | embeddings size = nh * hs
         # - hs | head size
         # - nh | number of heads
 
-        B, T, C = x.shape  # noqa: N806
+        B, T, C = x.shape
 
-        # TODO: apply einops
         # single pass for query, key and value; that's why we need to split into 3 parts
-        # query, key, value = self.qkv(x).split(
-        #     self.head_size * self.num_heads,
-        #     dim=-1,
-        # )  # (B, T, C) -> (B, T, 3 * hs * nh) -> (B, T, hs * nh)
-
-        qkv = self.qkv(x).chunk(3, dim=-1)
+        qkv = self.qkv(x).chunk(3, dim=-1)  # (B, T, 3 * hs * nh) -> 3 * (B, T, hs * nh)
 
         # transform (B, T, nh * hs) -> (B, nh, T, hs) so it's similar to multi-head attention
-        # key = key.view(B, T, self.num_heads, self.head_size).transpose(1, 2)  # (B, nh, T, hs)
-        # query = query.view(B, T, self.num_heads, self.head_size).transpose(1, 2)  # (B, nh, T, hs)
-        # value = value.view(B, T, self.num_heads, self.head_size).transpose(1, 2)  # (B, nh, T, hs)
-
-        # query = einops.rearrange(query, "B T (nh hs) -> B nh T hs", nh=self.num_heads)
-        # key = einops.rearrange(key, "B T (nh hs) -> B nh T hs", nh=self.num_heads)
-        # value = einops.rearrange(value, "B T (nh hs) -> B nh T hs", nh=self.num_heads)
-        query, key, value = map(lambda t: einops.rearrange(t, "B T (nh hs) -> B nh T hs", nh=self.num_heads), qkv)
-
-        # query = self.query(x).view(B, T, self.num_heads, self.head_size).transpose(1, 2)
-        # key = self.key(x).view(B, T, self.num_heads, self.head_size).transpose(1, 2)
-        # value = self.value(x).view(B, T, self.num_heads, self.head_size).transpose(1, 2)
+        query, key, value = (einops.rearrange(t, "B T (nh hs) -> B nh T hs", nh=self.num_heads) for t in qkv)
 
         # to obtain attention scores first do dot product of query and key
         attention_scores = query @ key.mT  # (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
@@ -127,7 +107,7 @@ class SelfAttention(nn.Module):
         # that will mean that the attention will be on a single (or couple of) tokens, and we want it to be
         # spread out (like [0.2, 0.1, 0.7])
         # we want to aggregate information not from a single node
-        attention_scores /= math.sqrt(key.shape[-1])  # (B, nh, T, T)
+        attention_scores /= math.sqrt(self.head_size)  # (B, nh, T, T)
 
         # since we want to do weighted averaging we need to transform attention scores into range [0, 1]
         # and sum of all scores should be equal to 1; softmax is a good tool for it
@@ -141,7 +121,6 @@ class SelfAttention(nn.Module):
         output = attention_scores @ value  # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
         # re-assemble all head outputs side by side
         output = einops.rearrange(output, "B nh T hs -> B T (nh hs)")
-        # output = output.transpose(1, 2).reshape(B, T, self.head_size * self.num_heads)  # (B, T, hs * nh)
         # output projection
         output = self.output(output)  # (B, T, C)
 
