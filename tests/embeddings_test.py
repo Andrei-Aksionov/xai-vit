@@ -3,8 +3,10 @@ import random
 import pytest
 import torch
 
+from src import config
 from src.models.vit.embeddings import ImageToPatches, PatchEmbeddings
-from tests.config import num_tests
+
+NUM_TESTS = config.tests.num_tests
 
 
 class TestImageToPatches:
@@ -12,9 +14,9 @@ class TestImageToPatches:
         ("batch_size", "channels", "image_size", "patch_size"),
         list(
             zip(
-                [random.randint(1, 10) for _ in range(num_tests)],
-                [random.randint(1, 5) for _ in range(num_tests)],
-                *(zip(*[(patch * random.randint(1, 11), patch) for patch in random.sample(range(1, 30), num_tests)])),
+                [random.randint(1, 10) for _ in range(NUM_TESTS)],
+                [random.randint(1, 5) for _ in range(NUM_TESTS)],
+                *(zip(*[(patch * random.randint(1, 11), patch) for patch in random.sample(range(1, 30), NUM_TESTS)])),
             ),
         ),
     )
@@ -37,10 +39,10 @@ class TestPatchEmbeddings:
         ("batch_size", "channels", "image_size", "patch_size", "embeddings_size"),
         list(
             zip(
-                [random.randint(1, 10) for _ in range(num_tests)],
-                [random.randint(1, 5) for _ in range(num_tests)],
-                *(zip(*[(patch * random.randint(1, 11), patch) for patch in random.sample(range(1, 30), num_tests)])),
-                [random.randint(1, 256) for _ in range(num_tests)],
+                [random.randint(1, 10) for _ in range(NUM_TESTS)],
+                [random.randint(1, 5) for _ in range(NUM_TESTS)],
+                *(zip(*[(patch * random.randint(1, 11), patch) for patch in random.sample(range(1, 30), NUM_TESTS)])),
+                [random.randint(1, 256) for _ in range(NUM_TESTS)],
             ),
         ),
     )
