@@ -32,7 +32,7 @@ class SelfAttention(nn.Module):
         num_heads : int
             how many self-attention heads to use
         bias : bool
-            whether to use bias or not: without bias might be a bit better and faster (but it's not for sure)
+            whether to use bias or not
         dropout : float
             how many connections between tokens are dropped during each forward pass
 

@@ -48,8 +48,6 @@ testpaths = ["tests"]
 
 # -------------------------------------- Linting and Formatting --------------------------------------
 [tool.ruff]
-# TODO: revisit allowed rules: perhaps it's better to allow some rather than allow all and
-# dissable some
 ignore = [
   "ANN002", # Missing type annotation for *_
   "ANN003", # Missing type annotation for **kwargs

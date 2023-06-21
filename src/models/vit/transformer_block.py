@@ -19,7 +19,7 @@ class FeedForward(nn.Module):
         embeddings_size : int
             size of the embeddings - the size of input of self-attention
         bias: bool
-            whether to use bias or not: without bias might be a bit better and faster
+            whether to use bias or not
         scaling : int
             feed-forward has two fully-connected layers; the number of neurons between them is larger
             than input and output sizes, `scaling` specifies by how much

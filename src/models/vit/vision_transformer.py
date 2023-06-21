@@ -12,45 +12,50 @@ from src.utils.error import log_error
 class ViT(nn.Module):
     def __init__(
         self,
+        image_size: int,
+        num_channels: int,
+        patch_size: int,
         embeddings_size: int,
         head_size: int | None,
         num_heads: int,
         feed_forward_scaling: int,
-        num_layers: int,
         bias: bool,
         dropout: float,
-        num_classes: int,  # TODO: docstring argument
-        num_channels: int,
-        patch_size: int,
-        image_size: int,
+        num_layers: int,
+        num_classes: int,
     ) -> None:
-        # TODO: update docstring
-        """Create Generative Pre-trained Transformer model (decoder part of transformer architecture).
+        """Create Vision Transformer model.
+
+        The architecture mimics what is used in Google's ViT model with patch size of 16 and image size of 224.
+        https://huggingface.co/google/vit-base-patch16-224
 
         Parameters
         ----------
+        image_size: int
+            size of the image that will be used for the model during training/inference
+        num_channels: int
+            number of channels of the input tensor
+        patch_size: int
+            the input tensor will be splitted into patches of this size
         embeddings_size : int
             size of the embeddings - the size of input of self-attention
         head_size : int | None
-            the size of output of self-attention
+            the size of output of self-attention;
+            if not provided `head_size` will be equal to `embeddings_size` // `num_heads`, so it should be divisible
+            without remainder
         num_heads : int
             how many self-attention heads to use
         feed_forward_scaling : int
             feed-forward has two fully-connected layers; the number of neurons between them is larger
             than input and output sizes, `feed_forward_scaling` specifies by how much
-        num_layers : int
-            how many transformer blocks to use
         bias: bool
-            whether to use bias or not: without bias might be a bit better and faster
+            whether to use bias or not
         dropout : float
             how many connection between tokens are dropped during each forward pass
-        weight_tying: bool
-           Weight Tying improves the performance of language models by tying (sharing) the weights of the embedding and
-           softmax layers. This method also massively reduces the total number of parameters in the language models that
-           it is applied to.
-           https://paperswithcode.com/method/weight-tying, by default True
-        weight_decay: float | None
-            if provided will prepare parameters for optimizer
+        num_layers : int
+            how many transformer blocks to use
+        num_classes: int
+            for how many classes the model should output predictions
         """
         super().__init__()
 
@@ -66,24 +71,25 @@ class ViT(nn.Module):
         self.patch_size = patch_size
         self.image_size = image_size
 
+        ### Embeddings ###
         # Create patch embeddings
         patch_embeddings = PatchEmbeddings(
             patch_size=self.patch_size,
             in_channels=self.num_channels,
             embeddings_size=self.embeddings_size,
         )
-        self.context_size = patch_embeddings.get_num_patches(self.image_size)
-
+        # +1 - to reserve space for classification token
+        num_patches = patch_embeddings.get_num_patches(self.image_size) + 1
         self.embeddings = nn.ParameterDict(
             {
                 "patch_embeddings": patch_embeddings,
                 "cls_token": nn.Parameter(torch.zeros(1, 1, self.embeddings_size)),
-                "position_embeddings": nn.Parameter(torch.randn(1, self.context_size + 1, self.embeddings_size) * 0.02),
+                "position_embeddings": nn.Parameter(torch.randn(1, num_patches, self.embeddings_size)),
+                "dropout": nn.Dropout(self.dropout) if self.dropout else nn.Identity(),
             },
         )
 
-        self.embeddings_dropout = nn.Dropout(self.dropout) if self.dropout else nn.Identity()
-
+        ### Transformer blocks/layers ###
         self.transformer_blocks = nn.Sequential(
             *[
                 TransformerBlock(
@@ -98,8 +104,9 @@ class ViT(nn.Module):
             ],
         )
 
-        self.layernorm = LayerNorm(self.embeddings_size, bias=self.bias)  # final layer norm
-
+        # final layer norm - normalize data after the last transformer block
+        self.layernorm = LayerNorm(self.embeddings_size, bias=self.bias)
+        # the last layer - transform tokens into logits for each class
         self.classifier = nn.Linear(self.embeddings_size, self.num_classes)
 
         # report number of parameters
@@ -110,121 +117,105 @@ class ViT(nn.Module):
         )
 
     def forward(self, x: Tensor) -> Tensor:
-        # TODO: update docstring
-        """Do the whole forward pass for decoder part of transformer.
-
-        This forward method includes all steps for decoder:
-        1. token embeddings + positional
-        2. transformer block consisting of self-attention, feed-forward, addNorm
-        3. logits for each token in vocabulary (or the last one in case of inference)
+        """Do the whole forward pass for ViT - encoder part of transformer for image processing.
 
         Parameters
         ----------
-        idx : Tensor
-            tensor of size (batch, time-step) consisting of indices of tokens inside vocabulary
-            for each time-step for each batch
-        inference: bool
-            during inference we don't care about all tokens but the very last one, so we can
-            apply final language head only on the last token and save some computations
-
-        Raises
-        ------
-        ValueError
-            if there is a mismatch between number of time-steps and self.context_size
+        x: Tensor
+            input image in form of tensor of shape (batch_size, channels, height, width)
 
         Returns
         -------
         Tensor
-            tensor of size (batch, time-step, vocabulary_size): logits for each token in vocabulary
-            for each time-step for each batch, or the last one in case of inference
+            tensor of size (batch, num_classes) that contains logits for all classes
         """
-        x = self.embeddings.patch_embeddings(x)
-        B, T, C = x.shape
+        # Notation:
+        # B - batch size
+        # T - sequence length (number of patches)
+        # C - embeddings size (of each patch)
+        # in_C, H, W - number of channels of the image/tensor, height and width
 
-        # add CLS token and positional embeddings
-        cls_token = self.embeddings.cls_token.repeat(B, 1, 1)
-        x = torch.cat([cls_token, x], dim=1)
-        x = x + self.embeddings.position_embeddings
+        # transform tensor of shape (B, in_C, H, W) into a set of patches where each one
+        # is represented by a vector of size `C`
+        x = self.embeddings.patch_embeddings(x)  # (B, T, C)
 
-        # apply transformer
-        x = self.embeddings_dropout(x)
-        x = self.transformer_blocks(x)
+        # add classification token (CLS) that will contain information for classification
+        cls_token = self.embeddings.cls_token.repeat(x.size(0), 1, 1)  # (B, 1, C)
+        x = torch.cat([cls_token, x], dim=1)  # (B, T + 1, C)
+        # add information of position of each token
+        x = x + self.embeddings.position_embeddings  # (B, T + 1, C)
+        x = self.embeddings.dropout(x)  # (B, T + 1, C)
 
-        # classification step
-        cls = x[:, 0, :]
-        return self.classifier(cls)
+        # apply transformer blocks
+        x = self.transformer_blocks(x)  # (B, T + 1, C)
+
+        # classification step: extract CLS token and process it's information via classification layer
+        cls = x[:, 0, :]  # (B, C)
+        return self.classifier(cls)  # (B, num_classes)
 
     @classmethod
+    @torch.no_grad()
     def from_pretrained(cls: "ViT", vit_type: str) -> "ViT":
-        """Create GPT2 model with weights copied from Huggingface pretrained model.
+        """Create ViT model with weights copied from Huggingface pretrained model.
 
         Parameters
         ----------
-        gpt2_type : str
-            GPT2 type: gpt2, gpt2-medium, gpt2-large and gpt2-xl are supported
+        vit_type : str
+            ViT type: google/vit-base-patch16-224 is supported for now, though other should work too,
+            yet not tested
 
         Returns
         -------
-        GPTLanguageModel
+        ViT
             a model with pretrained weights
 
         Raises
         ------
         ValueError
-            provided gpt2 type is not in the list of supported types
-        ValueError
-            Huggingface GPT2 config has different values for dropout
-        ValueError
-            mismatch number of keys/parameters between GPT and Huggingface's GPT2
-        ValueError
-            mismatch shape of a parameter between GPT and Huggingface's GPT2
+            mismatch shape of a parameter between ViT and Huggingface's ViT
         """
         # Notation:
-        # target* | the model to which the weights are copied (this GPT implementation)
-        # source* | the model from which the weight are copied (Huggingface GPT2 implementation)
+        # target* | the model to which the weights are copied (this ViT implementation)
+        # source* | the model from which the weight are copied (Huggingface ViT implementation)
 
         # huggingface transformers library is needed only in this method
-        from transformers import ViTConfig, ViTForImageClassification
+        from transformers import ViTForImageClassification
 
-        # check that the gpt2 type is supported
-        supported_types = "google/vit-base-patch16-224"
+        # check that the ViT type is supported
+        supported_types = ("google/vit-base-patch16-224",)
         if vit_type not in supported_types:
             logger.warning(f"Only '{supported_types}' were tested, but '{vit_type}' was provide.")
 
-        # prepare config that will be passed into our GPT implementation
-        source_config = ViTConfig.from_pretrained(vit_type)
-        # syncing argument names between our GPT implementation and from Huggingface
-        # TODO: fix ordering
-        target_config = {
-            "embeddings_size": source_config.hidden_size,
-            "head_size": None,
-            "num_heads": source_config.num_attention_heads,
-            "feed_forward_scaling": source_config.intermediate_size // source_config.hidden_size,
-            "num_layers": source_config.num_hidden_layers,
-            # TODO: in config it's a qkv bias
-            "bias": source_config.qkv_bias,
-            # TODO: there are at least two different dropouts
-            "dropout": source_config.hidden_dropout_prob,
-            "num_classes": 1_000,
-            "num_channels": source_config.num_channels,
-            "patch_size": source_config.patch_size,
-            "image_size": source_config.image_size,
-        }
-
-        # Instantiate GPT model and extract params
-        logger.debug("Creating ViT model with parameters: {}".format(target_config))
-        target_model = ViT(**target_config)
-        # extract gpt model parameters into a variable
-        target_state_dict = target_model.state_dict()
-
-        # TODO: source model should be placed before target one
-        # create Huggingface pretrained GPT2 model
+        # create Huggingface pretrained ViT model
         logger.debug("Loading pretrained Huggingface model of size '{}' ...".format(vit_type))
         source_model = ViTForImageClassification.from_pretrained(vit_type)
         logger.debug("Huggingface model is loaded.")
         source_state_dict = source_model.state_dict()
 
-        # since names of layers are different for our implementation and the one from Huggingface,
+        # prepare config that will be passed into our ViT implementation
+        # syncing argument names between our ViT implementation and from Huggingface
+        target_config = {
+            "image_size": source_model.config.image_size,
+            "num_channels": source_model.config.num_channels,
+            "patch_size": source_model.config.patch_size,
+            "embeddings_size": source_model.config.hidden_size,
+            "head_size": None,
+            "num_heads": source_model.config.num_attention_heads,
+            "feed_forward_scaling": source_model.config.intermediate_size // source_model.config.hidden_size,
+            "bias": source_model.config.qkv_bias,
+            "dropout": source_model.config.hidden_dropout_prob,
+            "num_layers": source_model.config.num_hidden_layers,
+            "num_classes": source_model.classifier.out_features,
+        }
+
+        # Instantiate ViT model and extract params
+        logger.debug("Creating ViT model with parameters: {}".format(target_config))
+        target_model = ViT(**target_config)
+        logger.debug("ViT model is created.")
+        # extract ViT model parameters into a variable
+        target_state_dict = target_model.state_dict()
+
+        # since names of layers are different between our implementation and the one from Huggingface,
         # we need to map them properly
         param_mapping = (
             (r"vit\.", ""),
@@ -244,7 +235,7 @@ class ViT(nn.Module):
         for source_key in source_state_dict:
             # in Huggingface implementation query, key and value matrices are
             # stored separately, while in this implementation - in a combined qkv matrix.
-            # So for now skip corresponding weights - it will be done later
+            # So for now skip corresponding weights - they will be loaded later
             if any(key in source_key for key in ("query", "key", "value")):
                 continue
             # map param name from Hugginface notation to this implementation's notation
@@ -255,8 +246,7 @@ class ViT(nn.Module):
                     f"Shape mismatch: for '{target_key}' shape of source '{source_weights.shape}' and destination - "
                     f"'{target_state_dict[target_key].shape}'",
                 )
-            with torch.no_grad():
-                target_state_dict[target_key].copy_(source_weights)
+            target_state_dict[target_key].copy_(source_weights)
 
         # loading weights: step 2 of 2
         # combine weights for query, key and value along embeddings dimension and copy
@@ -274,9 +264,7 @@ class ViT(nn.Module):
                     dim=0,
                 )
                 target_key = target_key_template.format(weight=weight_type)
-
-                with torch.no_grad():
-                    target_state_dict[target_key].copy_(source_weights)
+                target_state_dict[target_key].copy_(source_weights)
 
         logger.debug("Weights are copied.")
 
