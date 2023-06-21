@@ -1,23 +1,17 @@
-import math
 import re
-from functools import reduce
 
 import torch
-import torch.nn.functional as F
 from loguru import logger
 from torch import Tensor, nn
 
-from src.models.vit.embeddings import PatchEmbeddings, PatchEmbeddingsTimm
+from src.models.vit.embeddings import PatchEmbeddings
 from src.models.vit.transformer_block import LayerNorm, TransformerBlock
 from src.utils.error import log_error
 
 
-# TODO: rename
 class ViT(nn.Module):
     def __init__(
         self,
-        # TODO: create a config class
-        # vocab_size: int,
         embeddings_size: int,
         head_size: int | None,
         num_heads: int,
@@ -29,15 +23,12 @@ class ViT(nn.Module):
         num_channels: int,
         patch_size: int,
         image_size: int,
-        # weight_tying: bool = True,
-        # weight_decay: float | None = None,
     ) -> None:
+        # TODO: update docstring
         """Create Generative Pre-trained Transformer model (decoder part of transformer architecture).
 
         Parameters
         ----------
-        vocab_size : int
-            number of unique tokens in vocabulary
         embeddings_size : int
             size of the embeddings - the size of input of self-attention
         head_size : int | None
@@ -63,9 +54,7 @@ class ViT(nn.Module):
         """
         super().__init__()
 
-        # self.vocab_size = vocab_size
         self.embeddings_size = embeddings_size
-        # TODO: context size is calculated during patch conversion
         self.head_size = head_size
         self.num_heads = num_heads
         self.feed_forward_scaling = feed_forward_scaling
@@ -73,60 +62,30 @@ class ViT(nn.Module):
         self.bias = bias
         self.dropout = dropout
         self.num_classes = num_classes
-        # self.weigh_tying = weight_tying
-        # self.weight_decay = weight_decay
-        # TODO: this one needs to be calculated
         self.num_channels = num_channels
         self.patch_size = patch_size
         self.image_size = image_size
 
         # Create patch embeddings
-        # TODO: check should we use bias or not
-        # self.patch_embeddings = PatchEmbeddingsTimm(
-        #     patch_size=self.patch_size,
-        #     in_channels=self.num_channels,
-        #     embeddings_size=self.embeddings_size,
-        #     bias=True,
-        # )
-        # self.context_size = self.patch_embeddings.get_num_patches(self.image_size)
-        self.context_size = (image_size // patch_size) ** 2
+        patch_embeddings = PatchEmbeddings(
+            patch_size=self.patch_size,
+            in_channels=self.num_channels,
+            embeddings_size=self.embeddings_size,
+        )
+        self.context_size = patch_embeddings.get_num_patches(self.image_size)
 
         self.embeddings = nn.ParameterDict(
-            dict(
-                cls_token=nn.Parameter(torch.zeros(1, 1, self.embeddings_size)),
-                position_embeddings=nn.Parameter(torch.randn(1, self.context_size + 1, self.embeddings_size) * 0.02),
-                patch_embeddings=PatchEmbeddingsTimm(
-                    patch_size=self.patch_size,
-                    in_channels=self.num_channels,
-                    embeddings_size=self.embeddings_size,
-                    bias=True,
-                ),
-            )
+            {
+                "patch_embeddings": patch_embeddings,
+                "cls_token": nn.Parameter(torch.zeros(1, 1, self.embeddings_size)),
+                "position_embeddings": nn.Parameter(torch.randn(1, self.context_size + 1, self.embeddings_size) * 0.02),
+            },
         )
 
-        # TODO: input layer that transforms input embedding size to model's embeddings size
-        # TODO: transform it into LazyLinear
-        # self.input_layer = nn.LazyLinear(self.embeddings_size)
-        # self.input_layer = nn.Linear(self.num_channels * self.patch_size**2, self.embeddings_size)
-
-        # TODO: change it to patch embeddings
-        # self.token_embedding_table = nn.Embedding(self.vocab_size, self.embeddings_size)
-        # since attention doesn't have any notion of space and we want to use spatial information we need to implement
-        # positional embeddings (they will encode relative position of each token)
-        # positional embeddings knows how to encode position of last N (context_size) tokens
-
-        # TODO: change positional embeddings
-        # TODO: can we use here nn.Embeddings?
-        # NOTE: self.context_size + 1 because we need account cls token
-        # self.positional_embedding_table = nn.Parameter(
-        #     torch.randn(1, self.context_size + 1, self.embeddings_size) * 0.02,
-        # )
-        # self.positional_embedding_table = nn.Embedding(self.context_size, self.embeddings_size)
-        # TODO: add cls token
-        # self.cls_token = nn.Parameter(torch.zeros(1, 1, self.embeddings_size))
         self.embeddings_dropout = nn.Dropout(self.dropout) if self.dropout else nn.Identity()
-        self.transformer_blocks = nn.ModuleList(
-            [
+
+        self.transformer_blocks = nn.Sequential(
+            *[
                 TransformerBlock(
                     embeddings_size=self.embeddings_size,
                     head_size=self.head_size,
@@ -138,44 +97,20 @@ class ViT(nn.Module):
                 for _ in range(self.num_layers)
             ],
         )
+
         self.layernorm = LayerNorm(self.embeddings_size, bias=self.bias)  # final layer norm
 
-        # TODO: change it to classification head
-        # self.language_model_head = nn.Linear(self.embeddings_size, self.vocab_size, bias=False)
         self.classifier = nn.Linear(self.embeddings_size, self.num_classes)
-
-        # TODO: is it even a thing for ViT
-        # if self.weigh_tying:
-        #     self.token_embedding_table.weight = self.language_model_head.weight
-
-        # self.apply(self.__init_weights)
-        # TODO: revisit it (it's from GPT-2 paper)
-        # apply special scaled init to the residual projections, per GPT-2 paper
-        # for name, param in self.named_parameters():
-        #     if name.endswith("projection.weight"):
-        #         torch.nn.init.normal_(param, mean=0.0, std=0.2 / math.sqrt(2 * self.num_layers))
-
-        # configure parameters for optimizer that will be decay and that will not
-        # if self.weight_decay:
-        #     self.optimizer_parameters = self.__optimizer_parameters(weight_decay=self.weight_decay)
 
         # report number of parameters
         logger.debug(
-            "GPT language model is created with number of parameters: {:.2f} million".format(
-                self.__get_parameters_number(False) / 1e6,
+            "ViT model is created with number of parameters: {:.2f} million".format(
+                sum(param.numel() for param in self.parameters()) / 1e6,
             ),
         )
 
-    def __get_parameters_number(self, exclude_positional_embeddings: bool = True) -> int:
-        # TODO: print total number of parameters and number of learnable parameters
-        """Return total number of parameters of the model without counting parameters of positional embeddings."""
-        params_count = sum(param.numel() for param in self.parameters())
-        if exclude_positional_embeddings:
-            # FIXME: this doesn't work, says "Parameter has no attribute weight"
-            params_count -= self.positional_embedding_table.weight.numel()
-        return params_count
-
     def forward(self, x: Tensor) -> Tensor:
+        # TODO: update docstring
         """Do the whole forward pass for decoder part of transformer.
 
         This forward method includes all steps for decoder:
@@ -203,71 +138,21 @@ class ViT(nn.Module):
             tensor of size (batch, time-step, vocabulary_size): logits for each token in vocabulary
             for each time-step for each batch, or the last one in case of inference
         """
-        # batch, time-step
-        # B, T = idx.shape  # noqa: N806
-        # if self.context_size < T:
-        #     msg = f"Cannot do forward pass on sequence of length {T}, "
-        #     f"context size should less or equal to {self.context_size}"
-        #     raise ValueError(msg)
-
-        # # obtain token embeddings and add positional information
-        # token_embeddings = self.token_embedding_table(idx)  # (B, T, C)
-        # # if kv_cache is provided and it's not an empty tensor
-        # positional_embeddings = self.positional_embedding_table.weight[:T]  # (T, C)
-        # x = token_embeddings + positional_embeddings  # (B, T, C)
-        # x = self.embeddings_dropout(x)  # (B, T, C)
-
-        # # apply multiple transformer blocks
-        # for block in self.transformer_blocks:
-        #     x = block(x)
-        # # apply final normalization and generate logits for each token in vocabulary
-        # x = self.layer_norm_final(x)  # (B, T, C)
-
-        # # during inference we don't need to encode all token predictions,
-        # # only the last one (newly generated)
-        # if inference:
-        #     return self.language_model_head(x[:, -1:, :])  # (B, 1, vocab_size)
-        # return self.language_model_head(x)  # (B, T, vocab_size)
-
-        print(f"0: {x.shape=}")
         x = self.embeddings.patch_embeddings(x)
         B, T, C = x.shape
-        print(f"1: {x.shape=}")
-
-        # from input channels to embeddings_size
-        # x = self.input_layer(x)
-        # print(f"2: {x.shape=}")
 
         # add CLS token and positional embeddings
         cls_token = self.embeddings.cls_token.repeat(B, 1, 1)
-        # cls_token = self.embeddings.cls_token.expand(B, -1, -1)
-        print(f"3: {cls_token.shape=}")
         x = torch.cat([cls_token, x], dim=1)
-        print(f"4: {x.shape=}")
-        # TODO: why T + 1?
-        # apparently it's for additional cls token
-        # TODO: do we even need indexing?
-        x = x + self.embeddings.position_embeddings[:, : T + 1]
-        print(f"5: {x.shape=}")
+        x = x + self.embeddings.position_embeddings
 
         # apply transformer
         x = self.embeddings_dropout(x)
-        print(f"6: {x.shape=}")
-        # TODO: do we need it here?
-        # we can get rid of it
-        # x = x.transpose(0, 1)
-        # TODO: change it to sequential
-        for block in self.transformer_blocks:
-            x = block(x)
-        print(f"7: {x.shape=}")
+        x = self.transformer_blocks(x)
 
         # classification step
-        # cls = x[0]
         cls = x[:, 0, :]
-        print(f"8: {cls.shape=}")
-        predictions = self.classifier(cls)
-        print(f"9: {predictions.shape=}")
-        return predictions
+        return self.classifier(cls)
 
     @classmethod
     def from_pretrained(cls: "ViT", vit_type: str) -> "ViT":
@@ -347,7 +232,7 @@ class ViT(nn.Module):
             (r"attention\.attention", "attention"),
             (r"attention\.output\.dense", "attention.output"),
             (r"intermediate\.dense", "feed_forward.intermediate"),
-            (r"(\d)(\.output\.dense)", "\g<1>.feed_forward.output"),
+            (r"(\d)(\.output\.dense)", r"\g<1>.feed_forward.output"),
         )
 
         def sync_name(name: str) -> str:
@@ -356,7 +241,7 @@ class ViT(nn.Module):
             return name
 
         # loading weights: step 1 of 2
-        for source_key in source_state_dict.keys():
+        for source_key in source_state_dict:
             # in Huggingface implementation query, key and value matrices are
             # stored separately, while in this implementation - in a combined qkv matrix.
             # So for now skip corresponding weights - it will be done later
