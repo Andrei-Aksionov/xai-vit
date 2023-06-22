@@ -1,4 +1,5 @@
 import re
+from collections import defaultdict
 
 import torch
 from loguru import logger
@@ -23,6 +24,7 @@ class ViT(nn.Module):
         dropout: float,
         num_layers: int,
         num_classes: int,
+        id2label: dict[int, str] | None = None,
     ) -> None:
         """Create Vision Transformer model.
 
@@ -56,20 +58,23 @@ class ViT(nn.Module):
             how many transformer blocks to use
         num_classes: int
             for how many classes the model should output predictions
+        id2label: dict[int, str] | None
+            if provided will be used for decoding predictions
         """
         super().__init__()
 
+        self.image_size = image_size
+        self.num_channels = num_channels
+        self.patch_size = patch_size
         self.embeddings_size = embeddings_size
         self.head_size = head_size
         self.num_heads = num_heads
         self.feed_forward_scaling = feed_forward_scaling
-        self.num_layers = num_layers
         self.bias = bias
         self.dropout = dropout
+        self.num_layers = num_layers
         self.num_classes = num_classes
-        self.num_channels = num_channels
-        self.patch_size = patch_size
-        self.image_size = image_size
+        self.id2label = id2label
 
         ### Embeddings ###
         # Create patch embeddings
@@ -153,6 +158,33 @@ class ViT(nn.Module):
         cls = x[:, 0, :]  # (B, C)
         return self.classifier(cls)  # (B, num_classes)
 
+    def decode_logits(self, logits: Tensor, top_k: int) -> dict[int, list[dict]]:
+        """Return top k classes and corresponding probabilities.
+
+        Parameters
+        ----------
+        logits : Tensor
+            logits as model's output
+        top_k : int
+            classes with top k probabilities will be returned
+
+        Returns
+        -------
+        dict[int, list[dict]]
+            for each image list of top k classes and their probabilities
+        """
+        response = defaultdict(list)
+
+        # convert logits into probabilities
+        preds = torch.nn.functional.softmax(logits, dim=-1)
+        # work only with top k probabilities
+        values, indices = torch.topk(preds, k=top_k)
+        for batch in range(preds.size(0)):
+            for value, idx in zip(values[batch], indices[batch]):
+                response[batch].append({"class": self.id2label[idx.item()], "probability": value.item()})
+
+        return response
+
     @classmethod
     @torch.no_grad()
     def from_pretrained(cls: "ViT", vit_type: str) -> "ViT":
@@ -206,6 +238,7 @@ class ViT(nn.Module):
             "dropout": source_model.config.hidden_dropout_prob,
             "num_layers": source_model.config.num_hidden_layers,
             "num_classes": source_model.classifier.out_features,
+            "id2label": source_model.config.id2label,
         }
 
         # Instantiate ViT model and extract params
