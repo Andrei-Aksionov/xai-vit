@@ -238,11 +238,12 @@ class ViT(nn.Module):
             "dropout": source_model.config.hidden_dropout_prob,
             "num_layers": source_model.config.num_hidden_layers,
             "num_classes": source_model.classifier.out_features,
-            "id2label": source_model.config.id2label,
         }
 
         # Instantiate ViT model and extract params
         logger.debug("Creating ViT model with parameters: {}".format(target_config))
+        # id2label is added here to not add noise in the logging
+        target_config["id2label"] = source_model.config.id2label
         target_model = ViT(**target_config)
         logger.debug("ViT model is created.")
         # extract ViT model parameters into a variable
