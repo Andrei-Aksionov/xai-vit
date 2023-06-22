@@ -66,4 +66,4 @@ jobs:
       - name: Run tests
         run: |
           source $VENV
-          pytest -m smoke --capture=sys
+          pytest --capture=sys
