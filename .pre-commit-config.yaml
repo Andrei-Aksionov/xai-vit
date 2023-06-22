@@ -4,6 +4,8 @@ repos:
     rev: v4.4.0
     hooks:
       - id: check-added-large-files
+        args:
+          - --maxkb=1024
       - id: check-yaml
       - id: end-of-file-fixer
       - id: trailing-whitespace
@@ -34,7 +36,7 @@ repos:
 
     # ruff
   - repo: https://github.com/charliermarsh/ruff-pre-commit
-    rev: "v0.0.271"
+    rev: "v0.0.254"
     hooks:
       - id: ruff
 

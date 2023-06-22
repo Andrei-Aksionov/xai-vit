@@ -1,0 +1,19 @@
+seed: 42
+
+data:
+  path:
+    raw: data/raw
+    interim: data/interim
+
+model:
+  vit:
+    pretrained:
+      name: google/vit-base-patch16-224
+
+tests:
+  num_tests: 10 # number of parametrized versions of tests
+  vit:
+    dataset:
+      huggingface:
+        name: theodor1289/imagenet-1k_tiny
+        split: train
