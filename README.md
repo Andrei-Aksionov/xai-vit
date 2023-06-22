@@ -26,11 +26,11 @@ In this repository the subject matter is Vision Transformer (ViT) - an adaptatio
 ROADMAP:
 
 - [x] Implement ViT for image classification from scratch. That will help analyze process of "thinking" later on.
-- [] Create "heatmap" for attentions. That should help to visualize on which parts of image the model pays more attention during forward pass.
-- [] Analyze heads for multi-head attention. Some of them should focus on short-distance tokens, while other - on long-distance ones. I would like to check whether it's true or not.
-- [] Repeat the same for the task of segmentation.
-- [] Repeat the same for the task of object detection.
-- [] And beyond ...
+- [ ] Create "heatmap" for attentions. That should help to visualize on which parts of image the model pays more attention during forward pass.
+- [ ] Analyze heads for multi-head attention. Some of them should focus on short-distance tokens, while other - on long-distance ones. I would like to check whether it's true or not.
+- [ ] Repeat the same for the task of segmentation.
+- [ ] Repeat the same for the task of object detection.
+- [ ] And beyond ...
 
 # How to use it
 
