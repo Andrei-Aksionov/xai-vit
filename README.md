@@ -5,10 +5,7 @@
 </p>
 
 ![Python versions](/assets/readme/python_versions.svg)
-
-TODO: change link
-[![test](https://github.com/Andrei-Aksionov/nanoGPTplus/actions/workflows/test.yaml/badge.svg)](https://github.com/Andrei-Aksionov/nanoGPTplus/actions/workflows/test.yaml)
-
+[![test](https://github.com/Andrei-Aksionov/xai-vit/actions/workflows/test.yaml/badge.svg)](https://github.com/Andrei-Aksionov/xai-vit/actions/workflows/test.yaml)
 ***
 
 <p align=center><img src="assets/readme/nn_scheme.png"></p>
