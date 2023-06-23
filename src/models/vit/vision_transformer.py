@@ -156,6 +156,7 @@ class ViT(nn.Module):
 
         # classification step: extract CLS token and process it's information via classification layer
         cls = x[:, 0, :]  # (B, C)
+        cls = self.layernorm(cls)  # (B, C)
         return self.classifier(cls)  # (B, num_classes)
 
     def decode_logits(self, logits: Tensor, top_k: int) -> dict[int, list[dict]]:
