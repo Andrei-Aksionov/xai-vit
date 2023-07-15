@@ -1,3 +1,4 @@
+import math
 import re
 from collections import defaultdict
 
@@ -140,6 +141,8 @@ class ViT(nn.Module):
         # C - embeddings size (of each patch)
         # in_C, H, W - number of channels of the image/tensor, height and width
 
+        B, in_C, H, W = x.shape
+
         # transform tensor of shape (B, in_C, H, W) into a set of patches where each one
         # is represented by a vector of size `C`
         x = self.embeddings.patch_embeddings(x)  # (B, T, C)
@@ -148,7 +151,9 @@ class ViT(nn.Module):
         cls_token = self.embeddings.cls_token.repeat(x.size(0), 1, 1)  # (B, 1, C)
         x = torch.cat([cls_token, x], dim=1)  # (B, T + 1, C)
         # add information of position of each token
-        x = x + self.embeddings.position_embeddings  # (B, T + 1, C)
+        # TODO: add interpolate pos embeddings
+        # x = x + self.embeddings.position_embeddings  # (B, T + 1, C)
+        x = x + self.interpolate_pos_encoding(x, W, H)  # (B, T + 1, C)
         x = self.embeddings.dropout(x)  # (B, T + 1, C)
 
         # apply transformer blocks
@@ -158,6 +163,30 @@ class ViT(nn.Module):
         cls = x[:, 0, :]  # (B, C)
         cls = self.layernorm(cls)  # (B, C)
         return self.classifier(cls)  # (B, num_classes)
+
+    # flake8: noqa
+    # TODO: perhaps h, w?
+    def interpolate_pos_encoding(self, x, w, h):
+        num_patch = x.shape[1] - 1
+        N = self.embeddings.position_embeddings.shape[1] - 1
+        if num_patch == N and w == h:
+            return self.embeddings.position_embeddings
+        class_pos_embed = self.embeddings.position_embeddings[:, 0]
+        patch_pos_embed = self.embeddings.position_embeddings[:, 1:]
+        dim = x.shape[-1]
+        w0 = w // self.embeddings.patch_embeddings.patch_size
+        h0 = h // self.embeddings.patch_embeddings.patch_size
+        # we add a small number to avoid floating point error in the interpolation
+        # see discussion at https://github.com/facebookresearch/dino/issues/8
+        w0, h0 = w0 + 0.1, h0 + 0.1
+        patch_pos_embed = nn.functional.interpolate(
+            patch_pos_embed.reshape(1, int(math.sqrt(N)), int(math.sqrt(N)), dim).permute(0, 3, 1, 2),
+            scale_factor=(w0 / math.sqrt(N), h0 / math.sqrt(N)),
+            mode="bicubic",
+        )
+        assert int(w0) == patch_pos_embed.shape[-2] and int(h0) == patch_pos_embed.shape[-1]
+        patch_pos_embed = patch_pos_embed.permute(0, 2, 3, 1).view(1, -1, dim)
+        return torch.cat((class_pos_embed.unsqueeze(0), patch_pos_embed), dim=1)
 
     def decode_logits(self, logits: Tensor, top_k: int) -> dict[int, list[dict]]:
         """Return top k classes and corresponding probabilities.

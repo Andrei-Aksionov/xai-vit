@@ -35,3 +35,5 @@ class ImageTransform:
         x = self.transform(x)
         # if it's a single image - add artificial batch size of 1
         return x[None, :] if x.ndim == 3 else x
+
+    # TODO: make a method that loads config from Huggingface model
